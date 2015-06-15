@@ -31,7 +31,6 @@ class FSkookumScriptGenerator : public ISkookumScriptGenerator
   virtual void    Initialize(const FString & root_local_path, const FString & root_build_path, const FString & output_directory, const FString & include_base) override;
   virtual void    ExportClass(UClass * class_p, const FString & source_header_file_name, const FString & generated_header_file_name, bool has_changed) override;
   virtual void    FinishExport() override;
-  virtual FString GetGeneratorName() const override;
 
   //---------------------------------------------------------------------------------------
   // Types
@@ -167,14 +166,12 @@ IMPLEMENT_MODULE(FSkookumScriptGenerator, SkookumScriptGenerator)
 
 void FSkookumScriptGenerator::StartupModule()
   {
-  IModularFeatures::Get().RegisterModularFeature(TEXT("ScriptGenerator"), this);
   }
 
 //---------------------------------------------------------------------------------------
 
 void FSkookumScriptGenerator::ShutdownModule()
   {
-  IModularFeatures::Get().UnregisterModularFeature(TEXT("ScriptGenerator"), this);
   }
 
 //=======================================================================================
@@ -308,13 +305,6 @@ void FSkookumScriptGenerator::FinishExport()
   fclose(m_debug_log_file);
 #endif
   }
-
-//---------------------------------------------------------------------------------------
-
-FString FSkookumScriptGenerator::GetGeneratorName() const
- {
- return TEXT("SkookumScript Binding Generator Plugin");
- }
 
 //=======================================================================================		//=======================================================================================
 // FSkookumScriptGenerator implementation
