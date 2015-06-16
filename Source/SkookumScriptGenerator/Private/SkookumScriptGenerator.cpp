@@ -129,6 +129,7 @@ class FSkookumScriptGenerator : public ISkookumScriptGenerator
   FString               generate_method_binding_declaration(const FString & function_name, bool is_static); // Generate declaration of method binding function
   FString               generate_this_pointer_initialization(const FString & class_name_cpp, UClass * class_p, bool is_static); // Generate code that obtains the 'this' pointer from scope_p
   FString               generate_method_parameter_expression(UFunction * function_p, UProperty * param_p, int32 ParamIndex);
+  FString               generate_method_out_parameter_expression(UFunction * function_p, UProperty * param_p, int32 ParamIndex, FString param_name);
   FString               generate_property_default_ctor_argument(UProperty * param_p);
 
   FString               generate_return_value_passing(UClass * class_p, UFunction * function_p, UProperty * return_value_p, const FString & return_value_name); // Generate code that passes back the return value
@@ -620,6 +621,7 @@ FString FSkookumScriptGenerator::generate_method_binding_code(const FString & cl
   function_body += FString::Printf(TEXT("    %s\r\n"), *generate_this_pointer_initialization(class_name_cpp, class_p, is_static));
 
   FString params;
+  FString out_params;
 
   const bool bHasParamsOrReturnValue = (function_p->Children != NULL);
   if (bHasParamsOrReturnValue)
@@ -637,6 +639,16 @@ FString FSkookumScriptGenerator::generate_method_binding_code(const FString & cl
       {
       UProperty * param_p = *param_it;
       params += FString::Printf(TEXT("    params.%s = %s;\r\n"), *param_p->GetName(), *generate_method_parameter_expression(function_p, param_p, ParamIndex));
+
+      if (!(param_p->GetPropertyFlags() & CPF_ReturnParm))
+        {
+        FString param_name = get_cpp_property_type_name(param_p, CPPF_ArgumentOrReturnValue);
+        if (param_p->GetPropertyFlags() & CPF_OutParm)
+          {
+          FString param_in_struct = FString::Printf(TEXT("params.%s"), *param_p->GetName());
+          out_params += FString::Printf(TEXT("      %s;\r\n"), *generate_method_out_parameter_expression(function_p, param_p, ParamIndex, *param_in_struct));
+          }
+        }
       }
     }
 
@@ -653,6 +665,8 @@ FString FSkookumScriptGenerator::generate_method_binding_code(const FString & cl
     {
     params += TEXT("      this_p->ProcessEvent(function_p, nullptr);\r\n");
     }
+
+  params += out_params;
   params += TEXT("      }\r\n");
 
   function_body += params;
@@ -794,6 +808,35 @@ FString FSkookumScriptGenerator::generate_this_pointer_initialization(const FStr
     {
     return FString::Printf(TEXT("%s * this_p = scope_p->this_as<SkUE%s>();"), *class_name_cpp, *class_name_skookum);
     }
+  }
+
+//---------------------------------------------------------------------------------------
+
+FString FSkookumScriptGenerator::generate_method_out_parameter_expression(UFunction * function_p, UProperty * param_p, int32 ParamIndex, FString param_name)
+  {
+  FString Initializer;
+
+  eSkTypeID type_id = get_skookum_property_type(param_p);
+  switch (type_id)
+    {
+    case SkTypeID_Integer:         Initializer = TEXT("scope_p->get_arg<SkInteger>(SkArg_%d) = %s"); break;
+    case SkTypeID_Real:            Initializer = TEXT("scope_p->get_arg<SkReal>(SkArg_%d) = %s"); break;
+    case SkTypeID_Boolean:         Initializer = TEXT("scope_p->get_arg<SkBoolean>(SkArg_%d) = %s"); break;
+    case SkTypeID_String:          Initializer = TEXT("scope_p->get_arg<SkString>(SkArg_%d) = AString(*%s, %s.Len())"); break; // $revisit MBreyer - Avoid copy here
+    case SkTypeID_Name:            Initializer = TEXT("scope_p->get_arg<SkUEName>(SkArg_%d) = %s"); break;
+    case SkTypeID_Vector2:         Initializer = TEXT("scope_p->get_arg<SkVector2>(SkArg_%d) = %s"); break;
+    case SkTypeID_Vector3:         Initializer = TEXT("scope_p->get_arg<SkVector3>(SkArg_%d) = %s"); break;
+    case SkTypeID_Vector4:         Initializer = TEXT("scope_p->get_arg<SkVector4>(SkArg_%d) = %s"); break;
+    case SkTypeID_Rotation:        Initializer = TEXT("scope_p->get_arg<SkRotation>(SkArg_%d) = %s"); break;
+    case SkTypeID_RotationAngles:  Initializer = TEXT("scope_p->get_arg<SkRotationAngles>(SkArg_%d) = %s"); break;
+    case SkTypeID_Transform:       Initializer = TEXT("scope_p->get_arg<SkTransform>(SkArg_%d) = %s"); break;
+    case SkTypeID_Color:           Initializer = TEXT("scope_p->get_arg<SkColor>(SkArg_%d) = %s"); break;
+    case SkTypeID_UClass:          Initializer = TEXT("scope_p->get_arg<SkUEEntityClass>(SkArg_%d) = %s"); break;
+    case SkTypeID_UObject:         Initializer = FString::Printf(TEXT("scope_p->get_arg<SkUE%s>(SkArg_%%d) = %%s"), *get_skookum_property_type_name(param_p)); break;
+    default:                       FError::Throwf(TEXT("Unsupported function param type: %s"), *param_p->GetClass()->GetName()); break;
+    }
+
+    return FString::Printf(*Initializer, ParamIndex + 1, *param_name, *param_name);
   }
 
 //---------------------------------------------------------------------------------------
