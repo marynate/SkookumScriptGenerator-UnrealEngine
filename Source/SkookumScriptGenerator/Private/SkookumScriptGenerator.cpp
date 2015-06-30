@@ -51,6 +51,7 @@ class FSkookumScriptGenerator : public ISkookumScriptGenerator
     SkTypeID_RotationAngles,
     SkTypeID_Transform,
     SkTypeID_Color,
+    SkTypeID_Enum,
     SkTypeID_UClass,
     SkTypeID_UObject,
 
@@ -105,6 +106,8 @@ class FSkookumScriptGenerator : public ISkookumScriptGenerator
   TArray<UClass *>      m_used_classes; // All classes used as types (by parameters, properties etc.)
   TArray<FString>       m_skip_classes; // All classes set to skip in UHT config file (Engine/Programs/UnrealHeaderTool/Config/DefaultEngine.ini)
 
+  TSet<UEnum *>         m_exported_enums;
+
 #ifdef USE_DEBUG_LOG_FILE
   FILE *                m_debug_log_file; // Quick file handle to print debug stuff to, generates log file in output folder
 #endif
@@ -116,6 +119,9 @@ class FSkookumScriptGenerator : public ISkookumScriptGenerator
   void                  generate_class_script_files(UClass * class_p); // Generate script files for a class and its methods and properties 
   void                  generate_class_header_file(UClass * class_p, const FString & source_header_file_name); // Generate header file for a class
   void                  generate_class_binding_file(UClass * class_p); // Generate binding code source file for a class
+
+  void                  generate_enum_from_property(UProperty * prop_p); // Generate script files for an enum
+  void                  generate_enum_script_files(UEnum * enum_p);
 
   FString               generate_method(const FString & class_name_cpp, UClass * class_p, UFunction * function_p, const MethodBinding & binding); // Generate script file and binding code for a method
   void                  generate_method_script_file(UFunction * function_p, const FString & script_function_name); // Generate script file for a method
@@ -139,8 +145,8 @@ class FSkookumScriptGenerator : public ISkookumScriptGenerator
   void                  generate_master_binding_file(); // Generate master source file that includes all others
 
   bool                  can_export_class(UClass * class_p, const FString & source_header_file_name) const;
-  static bool           can_export_method(UClass * class_p, UFunction * function_p);
-  static bool           can_export_property(UClass * class_p, UProperty * property_p);
+  bool                  can_export_method(UClass * class_p, UFunction * function_p);
+  bool                  can_export_property(UClass * class_p, UProperty * property_p);
   static bool           does_class_have_static_class(UClass * class_p);
   static bool           is_property_type_supported(UProperty * property_p);
 
@@ -341,6 +347,7 @@ const FString FSkookumScriptGenerator::ms_sk_type_id_names[FSkookumScriptGenerat
   TEXT("RotationAngles"),
   TEXT("Transform"),
   TEXT("Color"),
+  TEXT("Enum"),
   TEXT("EntityClass"),  // UClass
   TEXT("Entity"),       // UObject
   };
@@ -553,6 +560,80 @@ void FSkookumScriptGenerator::generate_class_binding_file(UClass * class_p)
   generated_code += TEXT("  }\r\n");
 
   save_header_if_changed(m_binding_code_path / class_binding_file_name, generated_code);
+  }
+
+//---------------------------------------------------------------------------------------
+void FSkookumScriptGenerator::generate_enum_from_property(UProperty * prop_p)
+  {
+  const UByteProperty* ByteProperty = Cast<UByteProperty>(prop_p);
+  if (!ByteProperty || !ByteProperty->IsEnum())
+    return;
+
+  UEnum* enum_p = ByteProperty->Enum;
+  if (m_exported_enums.Contains(enum_p))
+    return;
+
+  m_exported_enums.Add(enum_p);
+
+  generate_enum_script_files(enum_p);
+  }
+
+//---------------------------------------------------------------------------------------
+void FSkookumScriptGenerator::generate_enum_script_files(UEnum * enum_p)
+  {
+  FString enum_type_name = enum_p->GetName();
+  FString enum_path = m_scripts_path / TEXT("Object/Enum") / enum_type_name;
+
+  // meta
+  FString meta_file_path = enum_path / TEXT("!Class.sk-meta");
+  FString meta_body = get_comment_block(enum_p).Replace(TEXT("this field"), TEXT("this enum"));
+  if (!FFileHelper::SaveStringToFile(meta_body, *meta_file_path, ms_script_file_encoding))
+    {
+    FError::Throwf(TEXT("Could not save file: %s"), *meta_file_path);
+    }
+
+  // class data members and class constructor
+  FString data_file_path = enum_path / TEXT("!DataC.sk");
+  FString data_body;
+
+  FString consructor_file_path = enum_path / TEXT("!()C.sk");
+  FString enum_script_path = enum_p->GetPathName();
+  FString consructor_body;
+
+  for (int32 EnumIndex = 0; EnumIndex < enum_p->NumEnums() - 1; ++EnumIndex)
+    {
+    FString enum_val_name = enum_p->GetEnumName(EnumIndex);
+    FString enum_val_full_name = enum_p->GenerateFullEnumName(*enum_val_name);
+
+    FString skookified_val_nmae = skookify_var_name(enum_val_name);
+    if (skookified_val_nmae.Equals(TEXT("world")) || skookified_val_nmae.Equals(TEXT("random")))
+      {
+      skookified_val_nmae += "_";
+      }
+
+    FName token = FName(*enum_val_full_name, FNAME_Find);
+    if (token != NAME_None)
+      {
+      int32 Index = UEnum::LookupEnumName(token);
+      if (Index != INDEX_NONE)
+        {
+        data_body += FString::Printf(TEXT("%s !@@%s\r\n"), *enum_type_name, *skookified_val_nmae);
+        consructor_body += FString::Printf(TEXT("  @@%s: %s!int(%d)\r\n"), *skookified_val_nmae, *enum_type_name, Index);
+        }
+      }
+    }
+
+  if (!FFileHelper::SaveStringToFile(data_body, *data_file_path, ms_script_file_encoding))
+    {
+    FError::Throwf(TEXT("Could not save file: %s"), *data_file_path);
+    }
+
+  FString file_body = FString::Printf(TEXT("// %s\r\n// EnumPath: %s\r\n\r\n()\r\n\r\n  [\r\n%s  ]\r\n"), *enum_type_name, *enum_script_path, *consructor_body);
+  if (!FFileHelper::SaveStringToFile(file_body, *consructor_file_path, ms_script_file_encoding))
+    {
+    FError::Throwf(TEXT("Could not save file: %s"), *consructor_file_path);
+    }
+
   }
 
 //---------------------------------------------------------------------------------------
@@ -828,6 +909,7 @@ FString FSkookumScriptGenerator::generate_method_out_parameter_expression(UFunct
     case SkTypeID_RotationAngles:  Initializer = TEXT("scope_p->get_arg<SkRotationAngles>(SkArg_%d) = %s"); break;
     case SkTypeID_Transform:       Initializer = TEXT("scope_p->get_arg<SkTransform>(SkArg_%d) = %s"); break;
     case SkTypeID_Color:           Initializer = TEXT("scope_p->get_arg<SkColor>(SkArg_%d) = %s"); break;
+    case SkTypeID_Enum:            Initializer = TEXT("scope_p->get_arg<SkEnum>(SkArg_%d) = %s"); break;
     case SkTypeID_UClass:          Initializer = TEXT("scope_p->get_arg<SkUEEntityClass>(SkArg_%d) = %s"); break;
     case SkTypeID_UObject:         Initializer = FString::Printf(TEXT("scope_p->get_arg<SkUE%s>(SkArg_%%d) = %%s"), *get_skookum_property_type_name(param_p)); break;
     default:                       FError::Throwf(TEXT("Unsupported function param type: %s"), *param_p->GetClass()->GetName()); break;
@@ -864,6 +946,7 @@ FString FSkookumScriptGenerator::generate_method_parameter_expression(UFunction 
       case SkTypeID_RotationAngles:  Initializer = TEXT("scope_p->get_arg<SkRotationAngles>(SkArg_%d)"); break;
       case SkTypeID_Transform:       Initializer = TEXT("scope_p->get_arg<SkTransform>(SkArg_%d)"); break;
       case SkTypeID_Color:           Initializer = TEXT("scope_p->get_arg<SkColor>(SkArg_%d)"); break;
+      case SkTypeID_Enum:            Initializer = FString::Printf(TEXT("(%s)( static_cast<uint8>(scope_p->get_arg<SkEnum>(SkArg_%%d)) )"), *get_cpp_property_type_name(param_p, CPPF_ArgumentOrReturnValue)); break;
       case SkTypeID_UClass:          Initializer = TEXT("scope_p->get_arg<SkUEEntityClass>(SkArg_%d)"); break;
       case SkTypeID_UObject:         Initializer = FString::Printf(TEXT("scope_p->get_arg<SkUE%s>(SkArg_%%d)"), *get_skookum_property_type_name(param_p)); break;
       default:                       FError::Throwf(TEXT("Unsupported function param type: %s"), *param_p->GetClass()->GetName()); break;
@@ -891,6 +974,7 @@ FString FSkookumScriptGenerator::generate_property_default_ctor_argument(UProper
     case SkTypeID_Integer:         return TEXT("0");
     case SkTypeID_Real:            return TEXT("0.0f");
     case SkTypeID_Boolean:         return TEXT("false");
+    case SkTypeID_Enum:
     case SkTypeID_String:          
     case SkTypeID_Name:            
     case SkTypeID_Transform:       return TEXT("");
@@ -929,6 +1013,7 @@ FString FSkookumScriptGenerator::generate_return_value_passing(UClass * class_p,
       case SkTypeID_RotationAngles:  fmt = TEXT("SkRotationAngles::new_instance(%s)"); break;
       case SkTypeID_Transform:       fmt = TEXT("SkTransform::new_instance(%s)"); break;
       case SkTypeID_Color:           fmt = TEXT("SkColor::new_instance(%s)"); break;
+      case SkTypeID_Enum:            fmt = TEXT("SkEnum::new_instance((SkEnumType)%s,SkBrain::get_class(\"Enum\"))"); break;
       case SkTypeID_UClass:          fmt = TEXT("SkUEEntityClass::new_instance(%s)"); break;
       case SkTypeID_UObject:         fmt = FString::Printf(TEXT("SkUE%s::new_instance(%%s)"), *get_skookum_property_type_name(return_value_p)); break;
       default:                       FError::Throwf(TEXT("Unsupported return param type: %s"), *return_value_p->GetClass()->GetName()); break;
@@ -1043,6 +1128,11 @@ bool FSkookumScriptGenerator::can_export_method(UClass * class_p, UFunction * fu
       {
       return false;
       }
+
+    eSkTypeID type_id= get_skookum_property_type(param_p);
+
+    if (type_id == SkTypeID_Enum)
+      generate_enum_from_property(param_p);
     }
 
   return true;
@@ -1057,7 +1147,15 @@ bool FSkookumScriptGenerator::can_export_property(UClass * class_p, UProperty * 
     return false;
 
   // Check if property type is supported
-  return is_property_type_supported(property_p);
+  if (!is_property_type_supported(property_p))
+    return false;
+
+  eSkTypeID type_id = get_skookum_property_type(property_p);
+
+  if (type_id == SkTypeID_Enum)
+    generate_enum_from_property(property_p);
+
+  return true;
   }
 
 //---------------------------------------------------------------------------------------
@@ -1259,6 +1357,9 @@ FSkookumScriptGenerator::eSkTypeID FSkookumScriptGenerator::get_skookum_property
 
     }
 
+  const UByteProperty* ByteProperty = Cast<UByteProperty>(property_p);
+  if (ByteProperty && ByteProperty->IsEnum())              return SkTypeID_Enum;
+
   if (property_p->IsA(UClassProperty::StaticClass()))       return SkTypeID_UClass;
   if (property_p->IsA(UObjectPropertyBase::StaticClass()))  return SkTypeID_UObject;
 
@@ -1276,6 +1377,13 @@ FString FSkookumScriptGenerator::get_skookum_property_type_name(UProperty * prop
     UObjectPropertyBase * object_property_p = Cast<UObjectPropertyBase>(property_p);
     m_used_classes.AddUnique(object_property_p->PropertyClass);
     return skookify_class_name(object_property_p->PropertyClass->GetName());
+    }
+
+
+  if (type_id == SkTypeID_Enum)
+    {
+    UEnum * enum_p = Cast<UByteProperty>(property_p)->Enum;
+    return enum_p->GetName();
     }
 
   return ms_sk_type_id_names[type_id];
