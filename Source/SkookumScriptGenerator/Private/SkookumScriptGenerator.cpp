@@ -54,6 +54,7 @@ class FSkookumScriptGenerator : public ISkookumScriptGenerator
     SkTypeID_Enum,
     SkTypeID_UClass,
     SkTypeID_UObject,
+    SkTypeID_List,
 
     SkTypeID__Count
     };
@@ -136,11 +137,11 @@ class FSkookumScriptGenerator : public ISkookumScriptGenerator
 
   FString               generate_method_binding_declaration(const FString & function_name, bool is_static); // Generate declaration of method binding function
   FString               generate_this_pointer_initialization(const FString & class_name_cpp, UClass * class_p, bool is_static); // Generate code that obtains the 'this' pointer from scope_p
-  FString               generate_method_parameter_expression(UFunction * function_p, UProperty * param_p, int32 ParamIndex);
+  FString               generate_method_parameter_expression(UFunction * function_p, UProperty * param_p, int32 ParamIndex, FString format_string);
   FString               generate_method_out_parameter_expression(UFunction * function_p, UProperty * param_p, int32 ParamIndex, const FString & param_name);
   FString               generate_property_default_ctor_argument(UProperty * param_p);
 
-  FString               generate_return_value_passing(UClass * class_p, UFunction * function_p, UProperty * return_value_p, const FString & return_value_name); // Generate code that passes back the return value
+  FString               generate_return_or_param_value_passing(UClass * class_p, UFunction * function_p, UProperty * return_value_p, const FString & return_value_name, const FString & format_string, int32 ParamIndex = -1); // Generate code that passes back the return value
 
   void                  generate_master_binding_file(); // Generate master source file that includes all others
 
@@ -163,6 +164,7 @@ class FSkookumScriptGenerator : public ISkookumScriptGenerator
   static FString        get_cpp_property_type_name(UProperty * property_p, uint32 port_flags = 0);
   static FString        get_comment_block(UField * field_p);
   static FString        get_skookum_default_initializer(UFunction * function_p, UProperty * param_p);
+  FString               get_array_parameter_expression(UProperty * param_p, int32 ParamIndex);
 
   bool                  save_header_if_changed(const FString & HeaderPath, const FString & new_header_contents); // Helper to change a file only if needed
   void                  rename_temp_files(); // Puts generated files into place after all code generation is done
@@ -350,6 +352,7 @@ const FString FSkookumScriptGenerator::ms_sk_type_id_names[FSkookumScriptGenerat
   TEXT("Enum"),
   TEXT("EntityClass"),  // UClass
   TEXT("Entity"),       // UObject
+  TEXT("List"),
   };
 
 const FString FSkookumScriptGenerator::ms_reserved_keywords[] =
@@ -718,7 +721,7 @@ FString FSkookumScriptGenerator::generate_method_binding_code(const FString & cl
     for (TFieldIterator<UProperty> param_it(function_p); param_it; ++param_it, ++ParamIndex)
       {
       UProperty * param_p = *param_it;
-      params += FString::Printf(TEXT("    params.%s = %s;\r\n"), *param_p->GetName(), *generate_method_parameter_expression(function_p, param_p, ParamIndex));
+      params += generate_method_parameter_expression(function_p, param_p, ParamIndex, FString::Printf(TEXT("    params.%s = %%s;\r\n"), *param_p->GetName()) /*format_string*/);
 
       if ((param_p->GetPropertyFlags() & CPF_OutParm) && !(param_p->GetPropertyFlags() & CPF_ReturnParm))
         {
@@ -760,7 +763,7 @@ FString FSkookumScriptGenerator::generate_method_binding_code(const FString & cl
   if (return_value_p)
     {
     FString return_value_name = FString::Printf(TEXT("params.%s"), *return_value_p->GetName());
-    function_body += FString::Printf(TEXT("    %s\r\n"), *generate_return_value_passing(class_p, function_p, return_value_p, *return_value_name));
+    function_body += generate_return_or_param_value_passing(class_p, function_p, return_value_p, *return_value_name, /*result_format_string*/TEXT("      if (result_pp) *result_pp = %s;\r\n"));
     }
 
   FString generated_code = FString::Printf(TEXT("  %s\r\n    {\r\n"), *generate_method_binding_declaration(*binding.m_code_name, is_static));
@@ -814,7 +817,7 @@ FString FSkookumScriptGenerator::generate_property_getter_binding_code(UProperty
   generated_code += TEXT("    if (this_p)\r\n      {\r\n");
   generated_code += TEXT("      property_p->CopyCompleteValue(&property_value, property_p->ContainerPtrToValuePtr<void>(this_p));\r\n");
   generated_code += TEXT("      }\r\n");
-  generated_code += FString::Printf(TEXT("    %s\r\n"), *generate_return_value_passing(class_p, NULL, property_p, TEXT("property_value")));
+  generated_code += generate_return_or_param_value_passing(class_p, NULL, property_p, TEXT("property_value"), /*result_format_string=*/TEXT("      if (result_pp) *result_pp = %s;\r\n"));
   generated_code += TEXT("    }\r\n\r\n");
 
   return generated_code;
@@ -858,7 +861,7 @@ FString FSkookumScriptGenerator::generate_property_setter_binding_code(UProperty
   generated_code += FString::Printf(TEXT("    SK_ASSERTX(this_p, \"Tried to invoke method %s@%s but the %s is null.\");\r\n"), *get_skookum_class_name(class_p), *binding.m_script_name, *get_skookum_class_name(class_p));
   generated_code += TEXT("    if (this_p)\r\n      {\r\n");
   generated_code += FString::Printf(TEXT("      static UProperty * property_p = SkUEClassBindingHelper::find_class_property(SkUE%s::ms_uclass_p, TEXT(\"%s\"));\r\n"), *get_skookum_class_name(class_p), *property_p->GetName());
-  generated_code += FString::Printf(TEXT("      %s property_value = %s;\r\n"), *get_cpp_property_type_name(property_p, CPPF_ArgumentOrReturnValue), *generate_method_parameter_expression(NULL, property_p, 0));
+  generated_code += generate_method_parameter_expression(NULL, property_p, 0, /* format_string= */ FString::Printf(TEXT("      %s property_value = %%s;\r\n"), *get_cpp_property_type_name(property_p, CPPF_ArgumentOrReturnValue)));
   generated_code += TEXT("      property_p->CopyCompleteValue(property_p->ContainerPtrToValuePtr<void>(this_p), &property_value);\r\n");
   generated_code += TEXT("      }\r\n");
   generated_code += TEXT("    }\r\n\r\n");
@@ -912,15 +915,20 @@ FString FSkookumScriptGenerator::generate_method_out_parameter_expression(UFunct
     case SkTypeID_Enum:            Initializer = TEXT("scope_p->get_arg<SkEnum>(SkArg_%d) = %s"); break;
     case SkTypeID_UClass:          Initializer = TEXT("scope_p->get_arg<SkUEEntityClass>(SkArg_%d) = %s"); break;
     case SkTypeID_UObject:         Initializer = FString::Printf(TEXT("scope_p->get_arg<SkUE%s>(SkArg_%%d) = %%s"), *get_skookum_property_type_name(param_p)); break;
-    default:                       FError::Throwf(TEXT("Unsupported function param type: %s"), *param_p->GetClass()->GetName()); break;
+    case SkTypeID_List:            Initializer = generate_return_or_param_value_passing(nullptr, nullptr, param_p, *param_name,
+        /*result_format_string=*/FString::Printf(TEXT("scope_p->get_arg<SkList>(SkArg_%d) = %%s->as<SkList>()"), ParamIndex + 1), ParamIndex); break;
+    default:                      FError::Throwf(TEXT("Unsupported function param type: %s"), *param_p->GetClass()->GetName()); break;
     }
+
+    if (type_id == SkTypeID_List)
+      return Initializer;
 
     return FString::Printf(*Initializer, ParamIndex + 1, *param_name, *param_name);
   }
 
 //---------------------------------------------------------------------------------------
 
-FString FSkookumScriptGenerator::generate_method_parameter_expression(UFunction * function_p, UProperty * param_p, int32 ParamIndex)
+FString FSkookumScriptGenerator::generate_method_parameter_expression(UFunction * function_p, UProperty * param_p, int32 ParamIndex, FString format_string)
   {
   // We assume a parameter goes out only if it is either the return value (of course)
   // or if it is marked CPF_OutParm _and_ its name begins with "Out"
@@ -949,18 +957,22 @@ FString FSkookumScriptGenerator::generate_method_parameter_expression(UFunction 
       case SkTypeID_Enum:            Initializer = FString::Printf(TEXT("(%s)( static_cast<uint8>(scope_p->get_arg<SkEnum>(SkArg_%%d)) )"), *get_cpp_property_type_name(param_p, CPPF_ArgumentOrReturnValue)); break;
       case SkTypeID_UClass:          Initializer = TEXT("scope_p->get_arg<SkUEEntityClass>(SkArg_%d)"); break;
       case SkTypeID_UObject:         Initializer = FString::Printf(TEXT("scope_p->get_arg<SkUE%s>(SkArg_%%d)"), *get_skookum_property_type_name(param_p)); break;
+      case SkTypeID_List:            Initializer = get_array_parameter_expression(param_p, ParamIndex); break;
       default:                       FError::Throwf(TEXT("Unsupported function param type: %s"), *param_p->GetClass()->GetName()); break;
       }
-
-    return FString::Printf(*Initializer, ParamIndex + 1);
+    if (type_id == SkTypeID_List)
+      {
+      return Initializer + FString::Printf(*format_string, *FString::Printf(TEXT("t_arr_%d"), ParamIndex + 1));
+      }
+    return FString::Printf(*format_string, *FString::Printf(*Initializer, ParamIndex + 1));
     }
   else if (param_p->IsA(UObjectPropertyBase::StaticClass()) || param_p->IsA(UClassProperty::StaticClass()))
     {
-    return TEXT("nullptr");
+    return FString::Printf(*format_string, TEXT("nullptr"));
     }
   else
     {
-    return FString::Printf(TEXT("%s(%s)"), *get_cpp_property_type_name(param_p, CPPF_ArgumentOrReturnValue), *generate_property_default_ctor_argument(param_p));
+    return FString::Printf(*format_string, *FString::Printf(TEXT("%s(%s)"), *get_cpp_property_type_name(param_p, CPPF_ArgumentOrReturnValue), *generate_property_default_ctor_argument(param_p)));
     }
   }
 
@@ -975,6 +987,7 @@ FString FSkookumScriptGenerator::generate_property_default_ctor_argument(UProper
     case SkTypeID_Real:            return TEXT("0.0f");
     case SkTypeID_Boolean:         return TEXT("false");
     case SkTypeID_Enum:
+    case SkTypeID_List:
     case SkTypeID_String:          
     case SkTypeID_Name:            
     case SkTypeID_Transform:       return TEXT("");
@@ -992,19 +1005,19 @@ FString FSkookumScriptGenerator::generate_property_default_ctor_argument(UProper
 
 //---------------------------------------------------------------------------------------
 
-FString FSkookumScriptGenerator::generate_return_value_passing(UClass * class_p, UFunction * function_p, UProperty * return_value_p, const FString & return_value_name)
+FString FSkookumScriptGenerator::generate_return_or_param_value_passing(UClass * class_p, UFunction * function_p, UProperty * value_property, const FString & value_name, const FString & result_format_string, int32 ParamIndex /* =-1 */)
   {
-  if (return_value_p)
+  if (value_property)
     {
     FString fmt;
 
-    eSkTypeID type_id = get_skookum_property_type(return_value_p);
+    eSkTypeID type_id = get_skookum_property_type(value_property);
     switch (type_id)
       {
       case SkTypeID_Integer:         fmt = TEXT("SkInteger::new_instance(%s)"); break;
       case SkTypeID_Real:            fmt = TEXT("SkReal::new_instance(%s)"); break;
       case SkTypeID_Boolean:         fmt = TEXT("SkBoolean::new_instance(%s)"); break;
-      case SkTypeID_String:          fmt = TEXT("SkString::new_instance(AString(*%s, %s.Len()))"); break; // $revisit MBreyer - Avoid copy here
+      case SkTypeID_String:          fmt = TEXT("SkString::new_instance(AString(*(%s), %s.Len()))"); break; // $revisit MBreyer - Avoid copy here
       case SkTypeID_Name:            fmt = TEXT("SkUEName::new_instance(%s)"); break;
       case SkTypeID_Vector2:         fmt = TEXT("SkVector2::new_instance(%s)"); break;
       case SkTypeID_Vector3:         fmt = TEXT("SkVector3::new_instance(%s)"); break;
@@ -1015,12 +1028,33 @@ FString FSkookumScriptGenerator::generate_return_value_passing(UClass * class_p,
       case SkTypeID_Color:           fmt = TEXT("SkColor::new_instance(%s)"); break;
       case SkTypeID_Enum:            fmt = TEXT("SkEnum::new_instance((SkEnumType)%s,SkBrain::get_class(\"Enum\"))"); break;
       case SkTypeID_UClass:          fmt = TEXT("SkUEEntityClass::new_instance(%s)"); break;
-      case SkTypeID_UObject:         fmt = FString::Printf(TEXT("SkUE%s::new_instance(%%s)"), *get_skookum_property_type_name(return_value_p)); break;
-      default:                       FError::Throwf(TEXT("Unsupported return param type: %s"), *return_value_p->GetClass()->GetName()); break;
+      case SkTypeID_UObject:         fmt = FString::Printf(TEXT("SkUE%s::new_instance(%%s)"), *get_skookum_property_type_name(value_property)); break;
+      case SkTypeID_List:
+        {
+        const UArrayProperty* ArrayProperty = Cast<UArrayProperty>(value_property);
+        UProperty* inner_property = ArrayProperty->Inner;
+
+        fmt =  FString::Printf(TEXT("      %s t_arr_%d = %%s;\r\n"), *get_cpp_property_type_name(value_property, CPPF_ArgumentOrReturnValue), ParamIndex + 1);
+        fmt += FString::Printf(TEXT("      SkInstance * instance_%d = SkList::new_instance(t_arr_%d.Num());\r\n"), ParamIndex + 1, ParamIndex + 1);
+        fmt += FString::Printf(TEXT("      SkInstanceList & list_%d = instance_%d->as<SkList>();\r\n"), ParamIndex + 1, ParamIndex + 1);
+        fmt += FString::Printf(TEXT("      APArray<SkInstance> & instances_%d = list_%d.get_instances();\r\n"), ParamIndex + 1, ParamIndex + 1);
+        fmt += FString::Printf(TEXT("      int32_t len_%d = t_arr_%d.Num();\r\n"), ParamIndex + 1, ParamIndex + 1);
+        fmt += FString::Printf(TEXT("      for (int32 i = 0; i<len_%d; ++i)\r\n"), ParamIndex + 1);
+        fmt +=                 TEXT("        {\r\n");
+        fmt += generate_return_or_param_value_passing(class_p, function_p, inner_property, /*value_name=*/ FString::Printf(TEXT("t_arr_%d[i]"), ParamIndex + 1), 
+                                                                                 /*result_format_string=*/ FString::Printf(TEXT("        instances_%d.append(*(%%s));\r\n"), ParamIndex + 1));
+        fmt +=                 TEXT("        }\r\n");
+        }
+        break;
+      default:  FError::Throwf(TEXT("Unsupported return or param type: %s"), *value_property->GetClass()->GetName()); break;
       }
 
-    FString initializer = FString::Printf(*fmt, *return_value_name, *return_value_name);
-    return FString::Printf(TEXT("if (result_pp) *result_pp = %s;"), *initializer);
+    FString initializer = FString::Printf(*fmt, *value_name, *value_name);
+
+    if (type_id == SkTypeID_List)
+      return FString::Printf(*(initializer + result_format_string), /* value_string = */ *FString::Printf(TEXT("instance_%d"), ParamIndex + 1));
+
+    return FString::Printf(*result_format_string, /* value_string = */ *initializer);
     }
   else
     {
@@ -1114,9 +1148,9 @@ bool FSkookumScriptGenerator::can_export_method(UClass * class_p, UFunction * fu
     {
     UProperty * param_p = *param_it;
 
-    if (param_p->IsA(UArrayProperty::StaticClass()) ||
-      param_p->ArrayDim > 1 ||
-      param_p->IsA(UDelegateProperty::StaticClass()) ||
+    //if (param_p->IsA(UArrayProperty::StaticClass()) ||
+    //  param_p->ArrayDim > 1 ||
+    if (param_p->IsA(UDelegateProperty::StaticClass()) ||
       param_p->IsA(UMulticastDelegateProperty::StaticClass()) ||
       param_p->IsA(UWeakObjectProperty::StaticClass()) ||
       param_p->IsA(UInterfaceProperty::StaticClass()))
@@ -1357,11 +1391,23 @@ FSkookumScriptGenerator::eSkTypeID FSkookumScriptGenerator::get_skookum_property
 
     }
 
+  // enum
   const UByteProperty* ByteProperty = Cast<UByteProperty>(property_p);
   if (ByteProperty && ByteProperty->IsEnum())              return SkTypeID_Enum;
 
   if (property_p->IsA(UClassProperty::StaticClass()))       return SkTypeID_UClass;
   if (property_p->IsA(UObjectPropertyBase::StaticClass()))  return SkTypeID_UObject;
+  if (property_p->IsA(UArrayProperty::StaticClass()))
+    {
+    const UArrayProperty* ArrayProperty = Cast<UArrayProperty>(property_p);
+    UProperty* InnerPropety = ArrayProperty->Inner;
+    if (is_property_type_supported(InnerPropety))
+      {
+      eSkTypeID inner_type_id = get_skookum_property_type(ArrayProperty->Inner);
+      if (inner_type_id != SkTypeID_List)
+        return SkTypeID_List;
+      }
+    }
 
   // Didn't find a known type
   return SkTypeID_None;
@@ -1415,6 +1461,7 @@ FString FSkookumScriptGenerator::get_cpp_property_type_name(UProperty * property
   static FString decl_TEnumAsByte(TEXT("TEnumAsByte<enum "));
   static FString decl_TSubclassOf(TEXT("TSubclassOf<class "));
   static FString decl_TSubclassOfShort(TEXT("TSubclassOf<"));
+  static FString decl_TArray(TEXT("TArray"));
 
   FString property_type_name = property_p->GetCPPType(NULL, port_flags);
   // Strip any forward declaration keywords
@@ -1432,6 +1479,12 @@ FString FSkookumScriptGenerator::get_cpp_property_type_name(UProperty * property
         || property_type_name.StartsWith(decl_TSubclassOfShort))
     {
     property_type_name = TEXT("UClass *");
+    }
+  else if (property_type_name.StartsWith(decl_TArray))
+    {
+    const UArrayProperty* ArrayProperty = Cast<UArrayProperty>(property_p);
+    UProperty* InnerProperty = ArrayProperty->Inner;
+    property_type_name = FString::Printf(TEXT("TArray<%s>"), *InnerProperty->GetCPPType(nullptr, CPPF_ArgumentOrReturnValue));
     }
   return property_type_name;
   }
@@ -1590,6 +1643,49 @@ FString FSkookumScriptGenerator::get_skookum_default_initializer(UFunction * fun
 #endif
   return default_value;
   }
+
+//---------------------------------------------------------------------------------------
+
+  FString FSkookumScriptGenerator::get_array_parameter_expression(UProperty * param_p, int32 ParamIndex)
+    {
+    const UArrayProperty * ArrayProperty = Cast<UArrayProperty>(param_p);
+    UProperty * InnerProperty = ArrayProperty->Inner;
+    FString inner_cpp_type_name = InnerProperty->GetCPPType(nullptr, CPPF_ArgumentOrReturnValue);
+    FString Initializer;
+    FString InnerExpression;
+
+    eSkTypeID inner_type_id = get_skookum_property_type(InnerProperty);
+    switch (inner_type_id)
+      {
+      case SkTypeID_Integer:                InnerExpression = TEXT("int(instance->as<SkInteger>())"); break;
+      case SkTypeID_Real:                   InnerExpression = TEXT("float(instance->as<SkReal>())"); break;
+      case SkTypeID_Boolean:                InnerExpression = TEXT("instance->as<SkBoolean>()"); break;
+      case SkTypeID_String:                 InnerExpression = TEXT("FString(instance->as<SkString>().as_cstr())"); break;
+      case SkTypeID_Name:                   InnerExpression = TEXT("instance->as<SkUEName>()"); break;
+      case SkTypeID_Vector2:                InnerExpression = TEXT("instance->as<SkVector2>()"); break;
+      case SkTypeID_Vector3:                InnerExpression = TEXT("instance->as<SkVector3>()"); break;
+      case SkTypeID_Vector4:                InnerExpression = TEXT("instance->as<SkVector4>()"); break;
+      case SkTypeID_Rotation:               InnerExpression = TEXT("instance->as<SkRotation>()"); break;
+      case SkTypeID_RotationAngles:         InnerExpression = TEXT("instance->as<SkRotationAngles>()"); break;
+      case SkTypeID_Transform:              InnerExpression = TEXT("instance->as<SkTransform>()"); break;
+      case SkTypeID_Color:                  InnerExpression = TEXT("instance->as<SkColor>()"); break;
+      case SkTypeID_Enum:                   InnerExpression = FString::Printf(TEXT("(%s)( static_cast<uint8>(instance->as<SkEnum>()) )"), *inner_cpp_type_name); break;
+      case SkTypeID_UClass:                 InnerExpression = TEXT("(UClass*)(instance->as<SkUEEntityClass>())"); break;
+      case SkTypeID_UObject:                InnerExpression = FString::Printf(TEXT("instance->as<SkUE%s>()"), *get_skookum_property_type_name(InnerProperty)); break;
+      case SkTypeID_List:
+      default:                              FError::Throwf(TEXT("Unsupported array inner type: %s"), *InnerProperty->GetClass()->GetName()); break;
+      }
+
+    Initializer = FString::Printf( TEXT("    APArray<SkInstance> & instances_%d = scope_p->get_arg<SkList>(SkArg_%d).get_instances();\r\n"), ParamIndex + 1, ParamIndex + 1);
+    Initializer += FString::Printf(TEXT("    TArray<%s> t_arr_%d;\r\n"), *inner_cpp_type_name, ParamIndex + 1);
+    Initializer += FString::Printf(TEXT("    uint32_t len_%d = instances_%d.get_length();\r\n"), ParamIndex + 1, ParamIndex + 1);
+    Initializer += FString::Printf(TEXT("    for (uint32_t i = 0; i < len_%d; ++i)\r\n"), ParamIndex + 1);
+    Initializer +=                 TEXT("      {\r\n");
+    Initializer += FString::Printf(TEXT("      SkInstance * instance = instances_%d[i];\r\n"), ParamIndex + 1);
+    Initializer += FString::Printf(TEXT("      t_arr_%d.Add(%s);\r\n"), ParamIndex + 1, *InnerExpression);
+    Initializer +=                 TEXT("      }\r\n");
+    return Initializer;
+    }
 
 //---------------------------------------------------------------------------------------
 
