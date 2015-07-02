@@ -1135,20 +1135,24 @@ FString FSkookumScriptGenerator::skookify_method_name(const FString & name, UPro
   FString method_name = skookify_var_name(name, &is_boolean);
 
   // Remove K2 (Kismet 2) prefix if present
-  method_name.RemoveFromStart(TEXT("k2_"), ESearchCase::CaseSensitive);
+  if (!method_name.Mid(3,1).IsNumeric())
+    method_name.RemoveFromStart(TEXT("k2_"), ESearchCase::CaseSensitive);
 
-  // If name starts with "get_", remove it
-  if (method_name.RemoveFromStart(TEXT("get_"), ESearchCase::CaseSensitive))
+  if (!method_name.Mid(4, 1).IsNumeric())
     {
-    // Append question mark
-    is_boolean = true;
-    }
-  // If name starts with "set_", remove it and append "_set" instead
-  else if (method_name.RemoveFromStart(TEXT("set_"), ESearchCase::CaseSensitive))
+    // If name starts with "get_", remove it
+    if (method_name.RemoveFromStart(TEXT("get_"), ESearchCase::CaseSensitive))
     {
-    method_name.Append(TEXT("_set"));
+      // Append question mark
+      is_boolean = true;
     }
-  
+    // If name starts with "set_", remove it and append "_set" instead
+    else if (method_name.RemoveFromStart(TEXT("set_"), ESearchCase::CaseSensitive))
+      {
+      method_name.Append(TEXT("_set"));
+      }
+    }
+
   // If name starts with "is_", "has_" or "can_" also append question mark
   if (method_name.Find(TEXT("is_"), ESearchCase::CaseSensitive) == 0
    || method_name.Find(TEXT("has_"), ESearchCase::CaseSensitive) == 0
