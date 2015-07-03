@@ -642,7 +642,7 @@ FString FSkookumScriptGenerator::generate_method_binding_code(const FString & cl
       if ((param_p->GetPropertyFlags() & CPF_OutParm) && !(param_p->GetPropertyFlags() & CPF_ReturnParm))
         {
         FString param_in_struct = FString::Printf(TEXT("params.%s"), *param_p->GetName());
-        out_params += FString::Printf(TEXT("      %s;\r\n"), *generate_method_out_parameter_expression(function_p, param_p, ParamIndex, param_in_struct));
+        out_params += FString::Printf(TEXT("    %s;\r\n"), *generate_method_out_parameter_expression(function_p, param_p, ParamIndex, param_in_struct));
         }
       }
     }
@@ -661,10 +661,10 @@ FString FSkookumScriptGenerator::generate_method_binding_code(const FString & cl
     params += TEXT("      this_p->ProcessEvent(function_p, nullptr);\r\n");
     }
 
-  params += out_params;
   params += TEXT("      }\r\n");
 
   function_body += params;
+  function_body += out_params;
 
   FString function_call_argumants;
   FString return_value_declaration;
@@ -840,7 +840,12 @@ FString FSkookumScriptGenerator::generate_method_out_parameter_expression(UFunct
 
 FString FSkookumScriptGenerator::generate_method_parameter_expression(UFunction * function_p, UProperty * param_p, int32 ParamIndex)
   {
-  if (!(param_p->GetPropertyFlags() & CPF_ReturnParm))
+  // We assume a parameter goes out only if it is either the return value (of course)
+  // or if it is marked CPF_OutParm _and_ its name begins with "Out"
+  bool is_out_only = (param_p->GetPropertyFlags() & CPF_ReturnParm)
+    || ((param_p->GetPropertyFlags() & CPF_OutParm) && param_p->GetName().Find(TEXT("Out")) == 0);
+  // If it's not a purely outgoing parameter, fetch it from the caller
+  if (!is_out_only)
     {
     FString Initializer;
 
@@ -1135,20 +1140,26 @@ FString FSkookumScriptGenerator::skookify_method_name(const FString & name, UPro
   FString method_name = skookify_var_name(name, &is_boolean);
 
   // Remove K2 (Kismet 2) prefix if present
-  method_name.RemoveFromStart(TEXT("k2_"), ESearchCase::CaseSensitive);
+  if (method_name.Len() > 3 && !method_name.Mid(3, 1).IsNumeric())
+    {
+    method_name.RemoveFromStart(TEXT("k2_"), ESearchCase::CaseSensitive);
+    }
 
-  // If name starts with "get_", remove it
-  if (method_name.RemoveFromStart(TEXT("get_"), ESearchCase::CaseSensitive))
+  if (method_name.Len() > 4 && !method_name.Mid(4, 1).IsNumeric())
     {
-    // Append question mark
-    is_boolean = true;
+    // If name starts with "get_", remove it
+    if (method_name.RemoveFromStart(TEXT("get_"), ESearchCase::CaseSensitive))
+      {
+      // Append question mark
+      is_boolean = true;
+      }
+    // If name starts with "set_", remove it and append "_set" instead
+    else if (method_name.RemoveFromStart(TEXT("set_"), ESearchCase::CaseSensitive))
+      {
+      method_name.Append(TEXT("_set"));
+      }
     }
-  // If name starts with "set_", remove it and append "_set" instead
-  else if (method_name.RemoveFromStart(TEXT("set_"), ESearchCase::CaseSensitive))
-    {
-    method_name.Append(TEXT("_set"));
-    }
-  
+
   // If name starts with "is_", "has_" or "can_" also append question mark
   if (method_name.Find(TEXT("is_"), ESearchCase::CaseSensitive) == 0
    || method_name.Find(TEXT("has_"), ESearchCase::CaseSensitive) == 0
