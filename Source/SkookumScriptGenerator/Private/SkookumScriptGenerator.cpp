@@ -642,7 +642,7 @@ FString FSkookumScriptGenerator::generate_method_binding_code(const FString & cl
       if ((param_p->GetPropertyFlags() & CPF_OutParm) && !(param_p->GetPropertyFlags() & CPF_ReturnParm))
         {
         FString param_in_struct = FString::Printf(TEXT("params.%s"), *param_p->GetName());
-        out_params += FString::Printf(TEXT("      %s;\r\n"), *generate_method_out_parameter_expression(function_p, param_p, ParamIndex, param_in_struct));
+        out_params += FString::Printf(TEXT("    %s;\r\n"), *generate_method_out_parameter_expression(function_p, param_p, ParamIndex, param_in_struct));
         }
       }
     }
@@ -1159,7 +1159,7 @@ FString FSkookumScriptGenerator::skookify_method_name(const FString & name, UPro
       method_name.Append(TEXT("_set"));
       }
     }
-  
+
   // If name starts with "is_", "has_" or "can_" also append question mark
   if (method_name.Find(TEXT("is_"), ESearchCase::CaseSensitive) == 0
    || method_name.Find(TEXT("has_"), ESearchCase::CaseSensitive) == 0
